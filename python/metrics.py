@@ -1,0 +1,103 @@
+from __future__ import annotations
+"""
+Metric definitions and normalization to 0-100 scale.
+All metrics are computed per (target, method, run) and independent of each other.
+"""
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+
+def _safe_ratio(num: float, den: float) -> float:
+    return 0.0 if den == 0 else num / den
+
+
+def _normalize_min_is_better(value: float, best: float, worst: float) -> float:
+    """Map [best..worst] to [100..0]. Values beyond range are clipped.
+    Example: redundancy rate where 0 is ideal.
+    """
+    if worst == best:
+        return 100.0
+    value = max(min(value, worst), best)
+    return 100.0 * (1.0 - (value - best) / (worst - best))
+
+
+def _normalize_max_is_better(value: float, worst: float, best: float) -> float:
+    """Map [worst..best] to [0..100]. Values beyond range are clipped.
+    Example: throughput where higher is better.
+    """
+    if best == worst:
+        return 100.0
+    value = max(min(value, best), worst)
+    return 100.0 * (value - worst) / (best - worst)
+
+
+@dataclass
+class MetricResult:
+    # Placeholder for future ground truth/statistical metrics
+    accuracy: float  # Not implemented: requires ground truth
+    completeness: float  # Not implemented: requires ground truth
+    freshness: float
+    redundancy: float
+    throughput: float
+    robustness: float
+
+
+class Metrics:
+
+    @staticmethod
+    def accuracy(expected: Dict[str, Any], got: Dict[str, Any]) -> float:
+        """
+        Placeholder for accuracy metric. Not implemented: requires ground truth.
+        Returns None or raises NotImplementedError in future.
+        """
+        return 0.0  # Placeholder only
+
+
+    @staticmethod
+    def completeness(expected_list_len: Optional[int], got_list_len: Optional[int]) -> float:
+        """
+        Placeholder for completeness metric. Not implemented: requires ground truth.
+        Returns None or raises NotImplementedError in future.
+        """
+        return 0.0  # Placeholder only
+
+    @staticmethod
+    def freshness(source_updated_at: Optional[str], observed_at_iso: Optional[str]) -> float:
+        """Timeliness: smaller lag is better.
+        We map 0 seconds lag to 100, and 7 days or more to 0, linearly.
+        """
+        if not source_updated_at or not observed_at_iso:
+            return 0.0
+        try:
+            src = datetime.fromisoformat(source_updated_at.replace("Z", "+00:00"))
+            obs = datetime.fromisoformat(observed_at_iso.replace("Z", "+00:00"))
+        except Exception:
+            return 0.0
+        lag_sec = max(0.0, (obs - src).total_seconds())
+        seven_days = 7 * 24 * 3600
+        return _normalize_min_is_better(lag_sec, best=0.0, worst=float(seven_days))
+
+    @staticmethod
+    def redundancy(total_items: int, unique_items: int) -> float:
+        """Lower duplicate rate is better: redundancy_rate = 1 - unique/total.
+        We map 0.0 (no redundancy) => 100, and 0.5+ => 0 (half or more duplicates).
+        """
+        if total_items <= 0:
+            return 100.0
+        redundancy_rate = max(0.0, 1.0 - _safe_ratio(unique_items, total_items))
+        return _normalize_min_is_better(redundancy_rate, best=0.0, worst=0.5)
+
+    @staticmethod
+    def throughput(pages_per_sec: float) -> float:
+        """Higher is better. We cap normalization at [0..10] pages/sec by default.
+        """
+        return _normalize_max_is_better(pages_per_sec, worst=0.0, best=10.0)
+
+    @staticmethod
+    def robustness(error_rate: float) -> float:
+        """Lower error rate across diverse pages => higher robustness.
+        0.0 error => 100, 0.5+ => 0.
+        """
+        return _normalize_min_is_better(error_rate, best=0.0, worst=0.5)

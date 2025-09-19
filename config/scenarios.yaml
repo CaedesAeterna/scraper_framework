@@ -1,0 +1,43 @@
+targets:
+  # Low-complexity static page
+  - name: example_org
+    url: https://example.org
+    expected_fields:
+      title: "Example Domain"
+    selectors:
+      title:
+        css: "h1"
+    source_updated_at: "2024-01-01T00:00:00Z"
+    complexity: low
+
+  # Medium: delayed response simulating dynamic content
+  - name: httpbin_delay
+    url: https://httpbin.org/delay/2
+    expected_fields:
+      title: "httpbin.org"
+    selectors:
+      title:
+        css: "title"
+    source_updated_at: "2024-01-01T00:00:00Z"
+    complexity: medium
+
+sampling:
+  repeats: 1
+  parallelism: 1
+
+time_budget:
+  requests:
+    timeout_seconds: 10
+  scrapy:
+    timeout_seconds: 10
+  selenium:
+    timeout_seconds: 20
+  puppeteer:
+    timeout_seconds: 20
+  playwright:
+    timeout_seconds: 20
+
+parsing:
+  text_normalization:
+    strip: true
+    lower: false

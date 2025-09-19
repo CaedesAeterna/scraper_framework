@@ -1,0 +1,19 @@
+{
+  "name": "scraper_framework",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node js/index.js",
+    "puppeteer": "node js/scrapers/puppeteer_scraper.js",
+    "playwright": "node js/scrapers/playwright_scraper.js"
+  },
+  "dependencies": {
+    "puppeteer": "^22.12.1",
+    "playwright": "^1.45.0",
+    "yargs": "^17.7.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

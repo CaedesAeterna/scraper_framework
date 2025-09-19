@@ -1,0 +1,45 @@
+targets:
+  - name: example_static
+    url: https://example.org
+    expected_fields:
+      title: "Example Domain"
+    selectors:
+      title:
+        css: "h1"
+      # You can add more fields and either css or xpath selector
+      # subtitle:
+      #   xpath: "//p[1]"
+    # optional ground-truth timestamp for freshness comparison
+    source_updated_at: "2024-01-01T00:00:00Z"
+    complexity: low
+
+  - name: example_dynamic
+    url: https://httpbin.org/delay/2
+    expected_fields:
+      placeholder: "ok"
+    selectors:
+      placeholder:
+        css: "body"
+    source_updated_at: "2024-01-01T00:00:00Z"
+    complexity: medium
+
+sampling:
+  repeats: 1
+  parallelism: 2
+
+time_budget:
+  requests:
+    timeout_seconds: 10
+  scrapy:
+    timeout_seconds: 10
+  selenium:
+    timeout_seconds: 20
+  puppeteer:
+    timeout_seconds: 20
+  playwright:
+    timeout_seconds: 20
+
+parsing:
+  text_normalization:
+    strip: true
+    lower: false
