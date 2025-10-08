@@ -82,6 +82,11 @@ class Evaluator:
         observed_at = timestamps.get("observed_at") or now_iso()
 
         expected_fields = (target.get("expected_fields") or {}).copy()
+        
+        # Check for pseudo ground truth
+        pseudo_gt = target.get("pseudo_ground_truth")
+        if pseudo_gt and not expected_fields:
+            expected_fields = pseudo_gt.copy()
         selectors = (target.get("selectors") or {}).copy()
         source_updated_at = target.get("source_updated_at")
 
