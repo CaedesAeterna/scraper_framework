@@ -32,6 +32,17 @@ targets:
     source_updated_at: "2024-01-01T00:00:00Z"
     complexity: high
 
+
+  - name: ww2_wikipedia
+    url: https://en.wikipedia.org/wiki/World_War_II
+    expected_fields:
+      title: "wiki"
+    selectors:
+      title:
+        css: "title"
+    source_updated_at: "2024-01-01T00:00:00Z"
+    complexity: high
+
 sampling:
   repeats: 1
   parallelism: 3

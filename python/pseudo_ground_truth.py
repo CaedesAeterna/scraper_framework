@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 import re
 import hashlib
+from .html_utils import normalize_html_text
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ class PseudoGroundTruthBuilder:
             if result.get('ok', False) and result.get('data')
         }
         
+        # Need at least min_consensus successful results
         if len(successful_results) < self.min_consensus:
             logger.warning(f"Insufficient successful results: {len(successful_results)} < {self.min_consensus}")
             return self._empty_consensus()
@@ -73,9 +75,11 @@ class PseudoGroundTruthBuilder:
         confidence_scores = {}
         field_metadata = {}
         
+        # Determine consensus per field
         for field, values in field_values.items():
             consensus_value, confidence, metadata = self._determine_consensus_value(field, values)
             
+            # Accept if confidence meets threshold
             if confidence >= self.confidence_threshold:
                 consensus_data[field] = consensus_value
                 confidence_scores[field] = confidence
@@ -84,6 +88,7 @@ class PseudoGroundTruthBuilder:
         # Calculate overall consensus quality
         overall_confidence = self._calculate_overall_confidence(confidence_scores)
         
+        # Compile final result 
         return {
             'consensus_data': consensus_data,
             'confidence_scores': confidence_scores,
@@ -98,6 +103,7 @@ class PseudoGroundTruthBuilder:
             }
         }
     
+    
     def _collect_field_values(self, successful_results: Dict[str, Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
         """Collect all field values from successful scraper results."""
         field_values = defaultdict(list)
@@ -108,6 +114,12 @@ class PseudoGroundTruthBuilder:
             # Get both direct data and extracted fields
             extracted_fields = result.get('raw', {}).get('extracted_fields', {})
             all_fields = {**data, **extracted_fields}
+            # Also include normalized page text derived from HTML if present
+            html_blob = data.get('html')
+            if isinstance(html_blob, str) and html_blob.strip():
+                pt = normalize_html_text(html_blob)
+                if pt:
+                    all_fields['page_text'] = pt
             
             for field, value in all_fields.items():
                 if value is not None and str(value).strip():  # Skip empty values
@@ -278,99 +290,7 @@ class PseudoGroundTruthBuilder:
         }
 
 
-class PseudoGroundTruthCache:
-    """
-    Cache for storing and retrieving pseudo ground truth data.
-    Uses URL patterns to enable reuse across similar pages.
-    """
-    
-    def __init__(self, cache_dir: Path):
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.cache_file = self.cache_dir / "pseudo_ground_truth_cache.json"
-        self.cache = self._load_cache()
-    
-    def _load_cache(self) -> Dict[str, Any]:
-        """Load cache from disk."""
-        if self.cache_file.exists():
-            try:
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception as e:
-                logger.warning(f"Failed to load cache: {e}")
-        return {}
-    
-    def _save_cache(self):
-        """Save cache to disk."""
-        try:
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
-                json.dump(self.cache, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to save cache: {e}")
-    
-    def _url_to_pattern(self, url: str) -> str:
-        """Convert URL to a pattern for caching."""
-        # Simple pattern: domain + path structure
-        import urllib.parse
-        parsed = urllib.parse.urlparse(url)
-        
-        # Generalize path by replacing numbers and IDs
-        path = re.sub(r'/\d+', '/{id}', parsed.path)
-        path = re.sub(r'[?&]id=\d+', '', path)
-        
-        return f"{parsed.netloc}{path}"
-    
-    def get(self, url: str, max_age_hours: int = 24) -> Optional[Dict[str, Any]]:
-        """Get cached pseudo ground truth for URL."""
-        pattern = self._url_to_pattern(url)
-        
-        if pattern in self.cache:
-            cached_data = self.cache[pattern]
-            
-            # Check age
-            timestamp = datetime.fromisoformat(cached_data['timestamp'].replace('Z', '+00:00'))
-            age_hours = (datetime.now(timezone.utc) - timestamp).total_seconds() / 3600
-            
-            if age_hours <= max_age_hours:
-                logger.info(f"Using cached pseudo ground truth for pattern: {pattern}")
-                return cached_data
-            else:
-                logger.info(f"Cached data too old ({age_hours:.1f}h) for pattern: {pattern}")
-        
-        return None
-    
-    def put(self, url: str, consensus_data: Dict[str, Any]):
-        """Store pseudo ground truth in cache."""
-        pattern = self._url_to_pattern(url)
-        
-        # Add URL pattern to metadata
-        cache_entry = consensus_data.copy()
-        cache_entry['url_pattern'] = pattern
-        cache_entry['original_url'] = url
-        
-        self.cache[pattern] = cache_entry
-        self._save_cache()
-        
-        logger.info(f"Cached pseudo ground truth for pattern: {pattern}")
-    
-    def clear_expired(self, max_age_hours: int = 168):  # 1 week default
-        """Clear expired cache entries."""
-        now = datetime.now(timezone.utc)
-        expired_patterns = []
-        
-        for pattern, data in self.cache.items():
-            timestamp = datetime.fromisoformat(data['timestamp'].replace('Z', '+00:00'))
-            age_hours = (now - timestamp).total_seconds() / 3600
-            
-            if age_hours > max_age_hours:
-                expired_patterns.append(pattern)
-        
-        for pattern in expired_patterns:
-            del self.cache[pattern]
-        
-        if expired_patterns:
-            self._save_cache()
-            logger.info(f"Cleared {len(expired_patterns)} expired cache entries")
+# Cache functionality removed. Pseudo-ground-truth is built fresh on every run.
 
 
 def create_pseudo_ground_truth_from_results(results_by_method: Dict[str, Dict[str, Any]], 

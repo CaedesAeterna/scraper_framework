@@ -29,6 +29,7 @@ def test_pseudo_ground_truth(url: str, methods: list = None, confidence_threshol
     # Run multiple scrapers
     results_by_method = {}
     
+    # Run scrapers sequentially for simplicity and clarity
     for method in tqdm(methods, desc="Running scrapers"):
         try:
             if method == "requests":

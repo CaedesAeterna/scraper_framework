@@ -12,6 +12,9 @@ import json
 import pandas as pd
 from bs4 import BeautifulSoup
 from lxml import html as LH
+import re
+from .html_utils import normalize_html_text
+import math
 
 from .metrics import Metrics
 
@@ -95,16 +98,145 @@ class Evaluator:
         html = data.get("html")
         if isinstance(html, str) and selectors:
             extracted_fields = self._extract_with_selectors(html, selectors)
-        # Use extracted fields for accuracy if any, otherwise fallback to provided data
-        fields_for_accuracy = extracted_fields if extracted_fields else data
+        # Prepare normalized page text
+        page_text = normalize_html_text(html) if isinstance(html, str) else ""
 
-        # Accuracy: per-field match (only expected keys are compared)
-        acc = Metrics.accuracy(expected_fields, fields_for_accuracy)
+        # Use extracted fields for accuracy if any, otherwise prefer page_text, else fallback to data
+        if extracted_fields:
+            fields_for_accuracy = extracted_fields
+        elif page_text:
+            fields_for_accuracy = {"page_text": page_text}
+        else:
+            fields_for_accuracy = data
 
-        # Completeness: if an expected items_count is given, compare counts; else binary success
-        expected_items = expected_fields.get("items_count")
-        got_items = data.get("items_count")
-        comp = Metrics.completeness(expected_items, got_items)
+        # Accuracy/completeness: if pseudo ground truth is provided, estimate against it
+        acc = 0.0
+        comp = 0.0
+
+        pseudo_gt = target.get('pseudo_ground_truth') or target.get('pseudo_gt')
+        def value_similarity(a: str, b: str) -> float:
+            """Return similarity between two values in [0.0, 1.0].
+            Handles numeric tolerance, currency stripping, case-insensitive exact match, and token Jaccard.
+            """
+            if a is None or b is None:
+                return 0.0
+            sa = str(a).strip()
+            sb = str(b).strip()
+
+            # Exact match (case-insensitive)
+            if sa.lower() == sb.lower():
+                return 1.0
+
+            # Try numeric comparison after stripping common currency symbols and separators
+            def normalize_number(s: str):
+                s2 = re.sub(r'[,$€£¥₹\s]', '', s)
+                try:
+                    return float(s2)
+                except Exception:
+                    return None
+
+            na = normalize_number(sa)
+            nb = normalize_number(sb)
+            if na is not None and nb is not None:
+                # relative closeness
+                if na == nb:
+                    return 1.0
+                diff = abs(na - nb)
+                denom = max(abs(na), abs(nb), 1.0)
+                sim = max(0.0, 1.0 - diff / denom)
+                return sim
+
+            # Token Jaccard similarity for strings
+            def tokens(s: str):
+                return set(t for t in re.split(r'\W+', s.lower()) if t)
+            ta = tokens(sa)
+            tb = tokens(sb)
+            if not ta and not tb:
+                return 0.0
+
+            # If both values are long, use a cosine-like approximation for more continuous scores
+            if len(ta) > 8 or len(tb) > 8:
+                inter = len(ta & tb)
+                if inter == 0:
+                    return 0.0
+                mag = math.sqrt(max(len(ta), 1) * max(len(tb), 1))
+                return inter / mag
+
+            inter = len(ta & tb)
+            union = len(ta | tb)
+            return inter / union if union > 0 else 0.0
+
+        if pseudo_gt and isinstance(pseudo_gt, dict) and pseudo_gt:
+            # fields_for_accuracy contains extracted fields (preferred) or direct data
+            extracted = fields_for_accuracy
+            # Accuracy: average similarity across pseudo-gt fields
+            total_fields = len(pseudo_gt)
+            if total_fields > 0:
+                # If comparison_results provided (leave-one-out other scrapers), compute
+                # accuracy as average pairwise similarity to other scrapers instead of comparing
+                # to consensus value (avoids tautological 100% when the method contributed).
+                comparison = target.get('comparison_results')
+                if comparison and isinstance(comparison, dict) and comparison:
+                    # Build set of comparison fields (union of fields from other scrapers)
+                    comp_fields = set()
+                    for mfields in comparison.values():
+                        if isinstance(mfields, dict):
+                            comp_fields.update(mfields.keys())
+
+                    if comp_fields:
+                        field_sims = []
+                        present = 0
+                        for field in comp_fields:
+                            ev = extracted.get(field)
+                            # average similarity of this method's value to other scrapers that have the field
+                            sims = []
+                            for other_fields in comparison.values():
+                                ov = other_fields.get(field) if isinstance(other_fields, dict) else None
+                                if ov is None or str(ov).strip() == "":
+                                    continue
+                                # if evaluated value missing, similarity 0
+                                if ev is None or str(ev).strip() == "":
+                                    sims.append(0.0)
+                                else:
+                                    sims.append(value_similarity(ev, ov))
+                            if sims:
+                                field_sims.append(sum(sims) / len(sims))
+                                if ev is not None and str(ev).strip() != "":
+                                    present += 1
+
+                        acc = 100.0 * (sum(field_sims) / len(field_sims)) if field_sims else 0.0
+                        comp = 100.0 * (present / len(comp_fields)) if comp_fields else 0.0
+                    else:
+                        # fallback to consensus-based scoring
+                        total_sim = 0.0
+                        present = 0
+                        for k, v in pseudo_gt.items():
+                            ev = extracted.get(k)
+                            if ev is None or str(ev).strip() == "":
+                                continue
+                            sim = value_similarity(ev, v)
+                            total_sim += sim
+                            present += 1
+                        acc = 100.0 * (total_sim / total_fields)
+                        comp = 100.0 * (present / total_fields)
+                else:
+                    total_sim = 0.0
+                    present = 0
+                    for k, v in pseudo_gt.items():
+                        ev = extracted.get(k)
+                        if ev is None or str(ev).strip() == "":
+                            continue
+                        sim = value_similarity(ev, v)
+                        total_sim += sim
+                        present += 1
+                    acc = 100.0 * (total_sim / total_fields)
+                    comp = 100.0 * (present / total_fields)
+        else:
+            # Fallback: keep previous behavior (use expected_fields if available)
+            acc = Metrics.accuracy(expected_fields, fields_for_accuracy)
+            expected_items = expected_fields.get("items_count")
+            got_items = data.get("items_count")
+            comp = Metrics.completeness(expected_items, got_items)
 
         # Freshness
         fresh = Metrics.freshness(source_updated_at, observed_at)
@@ -148,23 +280,31 @@ class Evaluator:
 
 
 def results_to_csv(results: List[Dict[str, Any]], out_path: Path):
-    # Flatten for CSV
-    rows = []
-    for r in results:
-        m = r.get("metrics", {})
-        rows.append({
-            "target": r.get("target"),
-            "url": r.get("url"),
-            "method": r.get("method"),
-            "ok": r.get("ok"),
-            "accuracy": m.get("accuracy"),
-            "completeness": m.get("completeness"),
-            "freshness": m.get("freshness"),
-            "redundancy": m.get("redundancy"),
-            "throughput": m.get("throughput"),
-            "robustness": m.get("robustness"),
-            "observed_at": r.get("observed_at"),
-        })
-    df = pd.DataFrame(rows)
+    # Flatten for CSV and write using stdlib csv to avoid pandas dependency
+    import csv
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out_path, index=False)
+    with open(out_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        header = [
+            "target", "url", "method", "ok", "accuracy", "completeness",
+            "freshness", "redundancy", "throughput", "robustness", "observed_at"
+        ]
+        writer.writerow(header)
+
+        for r in results:
+            m = r.get("metrics", {})
+            row = [
+                r.get("target"),
+                r.get("url"),
+                r.get("method"),
+                r.get("ok"),
+                m.get("accuracy"),
+                m.get("completeness"),
+                m.get("freshness"),
+                m.get("redundancy"),
+                m.get("throughput"),
+                m.get("robustness"),
+                r.get("observed_at"),
+            ]
+            writer.writerow(row)
