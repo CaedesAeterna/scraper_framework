@@ -16,4 +16,12 @@ Quickstart:
 - Run: python -m python.cli run --config config/scenarios.example.yaml --all
 - Pretty table: python -m python.print_table
 
-See README.hu.md for Hungarian documentation and usage.
+
+# Normal running 
+python main.py run --config config/scenarios.yaml --all
+
+# With pseudo-ground-truth building and LOO evaluation
+python main.py run --config config/scenarios.yaml --all --pseudo-ground-truth
+
+# Without saving raw results
+python main.py run --config config/scenarios.yaml --all --no-raw

@@ -1,0 +1,56 @@
+# Example configuration for pseudo ground truth usage
+# This configuration demonstrates how to use the framework without manual ground truth
+
+targets:
+  - name: example_static_no_gt
+    url: https://example.org
+    # No expected_fields - pseudo ground truth will be generated automatically
+    selectors:
+      title:
+        css: "h1"
+      description:
+        css: "p"
+    complexity: low
+
+  - name: httpbin_json_test
+    url: https://httpbin.org/json
+    # This endpoint returns JSON, good for testing data extraction
+    complexity: medium
+
+  - name: quotes_test
+    url: http://quotes.toscrape.com
+    selectors:
+      first_quote:
+        css: ".quote .text"
+      first_author:
+        css: ".quote .author"
+    complexity: medium
+
+sampling:
+  repeats: 1  # For pseudo GT, we need multiple methods, not multiple repeats
+  parallelism: 3
+
+# Pseudo ground truth configuration
+pseudo_ground_truth:
+  enabled: true
+  confidence_threshold: 0.6  # Minimum confidence to accept consensus
+  min_consensus: 2           # Minimum scrapers that must agree
+  cache_enabled: true
+  cache_max_age_hours: 24
+
+time_budget:
+  requests:
+    timeout_seconds: 10
+  scrapy:
+    timeout_seconds: 10
+  selenium:
+    timeout_seconds: 20
+  puppeteer:
+    timeout_seconds: 20
+  playwright:
+    timeout_seconds: 20
+
+parsing:
+  text_normalization:
+    strip: true
+    lower: false
