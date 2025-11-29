@@ -1,12 +1,14 @@
 from __future__ import annotations
+
 """
 Metric definitions and normalization to 0-100 scale.
-All metrics are computed per (target, method, run) and independent of each other.
+
+Note: Accuracy and Completeness are computed via pseudo ground truth 
+in evaluator.py, not here. This file only contains the other metrics.
 """
-from dataclasses import dataclass
+
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 
 
 def _safe_ratio(num: float, den: float) -> float:
@@ -33,36 +35,14 @@ def _normalize_max_is_better(value: float, worst: float, best: float) -> float:
     return 100.0 * (value - worst) / (best - worst)
 
 
-@dataclass
-class MetricResult:
-    # Placeholder for future ground truth/statistical metrics
-    accuracy: float  # Not implemented: requires ground truth
-    completeness: float  # Not implemented: requires ground truth
-    freshness: float
-    redundancy: float
-    throughput: float
-    robustness: float
-
-
 class Metrics:
-
-    @staticmethod
-    def accuracy(expected: Dict[str, Any], got: Dict[str, Any]) -> float:
-        """
-        Placeholder for accuracy metric. Not implemented: requires ground truth.
-        Returns None or raises NotImplementedError in future.
-        """
-        return 0.0  # Placeholder only
-
-
-    @staticmethod
-    def completeness(expected_list_len: Optional[int], got_list_len: Optional[int]) -> float:
-        """
-        Placeholder for completeness metric. Not implemented: requires ground truth.
-        Returns None or raises NotImplementedError in future.
-        """
-        return 0.0  # Placeholder only
-
+    """
+    Static metrics for scraper evaluation.
+    
+    Note: accuracy() and completeness() have been removed - these are
+    computed directly in evaluator.py using pseudo ground truth comparison.
+    """
+    
     @staticmethod
     def freshness(source_updated_at: Optional[str], observed_at_iso: Optional[str]) -> float:
         """Timeliness: smaller lag is better.
@@ -70,11 +50,13 @@ class Metrics:
         """
         if not source_updated_at or not observed_at_iso:
             return 0.0
+        
         try:
             src = datetime.fromisoformat(source_updated_at.replace("Z", "+00:00"))
             obs = datetime.fromisoformat(observed_at_iso.replace("Z", "+00:00"))
         except Exception:
             return 0.0
+        
         lag_sec = max(0.0, (obs - src).total_seconds())
         seven_days = 7 * 24 * 3600
         return _normalize_min_is_better(lag_sec, best=0.0, worst=float(seven_days))
@@ -91,8 +73,7 @@ class Metrics:
 
     @staticmethod
     def throughput(pages_per_sec: float) -> float:
-        """Higher is better. We cap normalization at [0..10] pages/sec by default.
-        """
+        """Higher is better. We cap normalization at [0..10] pages/sec by default."""
         return _normalize_max_is_better(pages_per_sec, worst=0.0, best=10.0)
 
     @staticmethod

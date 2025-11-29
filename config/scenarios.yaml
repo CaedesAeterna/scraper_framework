@@ -2,46 +2,32 @@ targets:
   # Low-complexity static page
   - name: example_org
     url: https://example.org
-    expected_fields:
-      title: "Example Domain"
-    selectors:
-      title:
-        css: "h1"
-    source_updated_at: "2024-01-01T00:00:00Z"
     complexity: low
 
   # Medium: delayed response simulating dynamic content
   - name: httpbin_delay
     url: https://httpbin.org/delay/2
-    expected_fields:
-      title: "httpbin.org"
-    selectors:
-      title:
-        css: "title"
-    source_updated_at: "2024-01-01T00:00:00Z"
     complexity: medium
 
   # another example target
   - name: bbc
     url: https://www.bbc.com/news/articles/c87y4ljx85qo
-    expected_fields:
-      title: "bbsc"
-    selectors:
-      title:
-        css: "title"
-    source_updated_at: "2024-01-01T00:00:00Z"
     complexity: high
 
 
   - name: ww2_wikipedia
     url: https://en.wikipedia.org/wiki/World_War_II
-    expected_fields:
-      title: "wiki"
-    selectors:
-      title:
-        css: "title"
-    source_updated_at: "2024-01-01T00:00:00Z"
     complexity: high
+
+  - name: rust
+    url: https://github.com/rust-lang/rust
+    complexity: high
+
+  - name: k8s
+    url: https://kubernetes.io/
+    complexity: high
+
+
 
 sampling:
   repeats: 1

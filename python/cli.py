@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 English-language core CLI for running scenarios and computing metrics.
+CRITICAL FIX: Extract fields from data, not just extracted_fields
 """
 import argparse
 import json
@@ -32,10 +33,7 @@ SUPPORTED_METHODS = [
 
 
 def run_node_scraper(script: str, url: str, timeout: int):
-    """Run a Node-based scraper (puppeteer/playwright) and return JSON result dict.
-
-    The Node script should print a single JSON line with keys: {"ok": bool, "data": {...}, "error": str|null, "timestamps": {...}}
-    """
+    """Run a Node-based scraper (puppeteer/playwright) and return JSON result dict."""
     try:
         proc = subprocess.run(
             ["node", script, "--url", url, "--timeout", str(timeout)],
@@ -46,7 +44,6 @@ def run_node_scraper(script: str, url: str, timeout: int):
         stdout = proc.stdout.strip()
         if not stdout:
             return {"ok": False, "error": "no output", "data": {}, "timestamps": {}}
-        # Expect last line to be JSON
         line = stdout.splitlines()[-1]
         return json.loads(line)
     except Exception as e:
@@ -60,7 +57,7 @@ class Runner:
         self.evaluator = Evaluator(self.config)
         self.use_pseudo_ground_truth = use_pseudo_ground_truth
         self.save_raw = save_raw
-        self.raw_results = []  # Store raw results for saving
+        self.raw_results = []
         
         if use_pseudo_ground_truth:
             self.pseudo_gt_builder = PseudoGroundTruthBuilder(
@@ -89,7 +86,6 @@ class Runner:
         else:
             res = {"ok": False, "data": {}, "error": f"unsupported method: {method}", "timestamps": {}}
         
-        # Store raw result if enabled
         if self.save_raw:
             self._save_raw_result(target, method, res)
         
@@ -104,87 +100,90 @@ class Runner:
             url = target.get("url")
             
             if self.use_pseudo_ground_truth:
-                # Run all methods for this target to build consensus
+                print(f"\n{'='*70}")
+                print(f"Processing target: {name}")
+                print(f"{'='*70}")
+                
+                # Run all methods for this target
                 target_results = self._run_target_all_methods(target, methods, repeats)
                 
                 # Build pseudo ground truth from consensus
                 pseudo_gt = self._build_pseudo_ground_truth_for_target(target, target_results)
                 
-                # Update target with pseudo ground truth if available
                 if pseudo_gt and pseudo_gt.get('overall_confidence', 0) > 0.6:
-                    enhanced_target = target.copy()
-                    enhanced_target['pseudo_ground_truth'] = pseudo_gt['consensus_data']
-                    enhanced_target['pseudo_confidence'] = pseudo_gt['overall_confidence']
+                    print(f"✓ Built pseudo ground truth (confidence: {pseudo_gt['overall_confidence']:.2f})")
+                    print(f"  Scrapers contributing: {pseudo_gt.get('scrapers_used', [])}")
+                    print(f"  Consensus fields: {list(pseudo_gt.get('consensus_data', {}).keys())}")
                     
-                    # Re-evaluate with pseudo ground truth (single pseudo-GT for all methods)
+                    # For each method, decide evaluation strategy
                     for method in methods:
                         if method not in target_results:
                             continue
 
-                        for r in range(len(target_results[method])):
-                            # By default use global pseudo GT
-                            eval_target = enhanced_target
-                            used_pseudo_meta = {
-                                'type': 'global',
-                                'scrapers_used': pseudo_gt.get('scrapers_used', []),
-                                'coverage': pseudo_gt.get('stats', {}).get('coverage')
-                            }
-
-                            # If the method contributed to the consensus, build a leave-one-out pseudo-GT
+                        for run_idx in range(len(target_results[method])):
+                            run_res = target_results[method][run_idx]
+                            
+                            # Check if this method contributed to pseudo GT
                             if method in pseudo_gt.get('scrapers_used', []):
-                                # Build results_by_method excluding this method
-                                results_by_method = {}
-                                for m, runs in target_results.items():
-                                    if m == method:
-                                        continue
-                                    if runs and runs[0].get('ok'):
-                                        results_by_method[m] = runs[0]
-
-                                if len(results_by_method) >= self.pseudo_gt_builder.min_consensus:
-                                    method_pseudo = self.pseudo_gt_builder.build_consensus(results_by_method)
-                                    if method_pseudo and method_pseudo.get('overall_confidence', 0) > 0.6:
-                                        eval_target = enhanced_target.copy()
-                                        eval_target['pseudo_ground_truth'] = method_pseudo['consensus_data']
-                                        eval_target['pseudo_confidence'] = method_pseudo['overall_confidence']
-                                        used_pseudo_meta = {
-                                            'type': 'leave-one-out',
-                                            'scrapers_used': method_pseudo.get('scrapers_used', []),
-                                            'coverage': method_pseudo.get('stats', {}).get('coverage')
-                                        }
-                                    else:
-                                        # Couldn't build a reliable leave-one-out pseudo-GT.
-                                        # To avoid tautological 100% scores, do not evaluate accuracy/completeness.
-                                        # Perform a regular evaluation but null out accuracy/completeness and mark tautological.
-                                        eval_res = self.evaluator.evaluate_single(target, method, target_results[method][r])
-                                        eval_res['pseudo_ground_truth_used'] = False
-                                        eval_res['tautological'] = True
-                                        # Null out possibly-tautological metrics
-                                        eval_res['metrics']['accuracy'] = None
-                                        eval_res['metrics']['completeness'] = None
-                                        results.append(eval_res)
-                                        continue
-
-                            eval_res = self.evaluator.evaluate_single(eval_target, method, target_results[method][r])
-                            # Add pseudo ground truth metadata
-                            eval_res['pseudo_ground_truth_used'] = True
-                            eval_res['pseudo_confidence'] = eval_target.get('pseudo_confidence', pseudo_gt.get('overall_confidence'))
-                            eval_res['consensus_metadata'] = used_pseudo_meta
+                                print(f"\n  Evaluating {method} (leave-one-out)...")
+                                
+                                # Build leave-one-out evaluation
+                                loo_target = self._build_leave_one_out_evaluation(
+                                    target, method, target_results
+                                )
+                                
+                                if loo_target:
+                                    print(f"    ✓ Leave-one-out successful")
+                                    print(f"    Comparing against: {list(loo_target.get('comparison_results', {}).keys())}")
+                                    
+                                    eval_res = self.evaluator.evaluate_single(loo_target, method, run_res)
+                                    eval_res['pseudo_ground_truth_used'] = True
+                                    eval_res['evaluation_type'] = 'leave-one-out'
+                                    eval_res['pseudo_confidence'] = loo_target.get('pseudo_confidence')
+                                else:
+                                    print(f"    ✗ Leave-one-out failed (insufficient data)")
+                                    eval_res = self.evaluator.evaluate_single(target, method, run_res)
+                                    eval_res['pseudo_ground_truth_used'] = False
+                                    eval_res['evaluation_type'] = 'tautological'
+                                    eval_res['metrics']['accuracy'] = None
+                                    eval_res['metrics']['completeness'] = None
+                            else:
+                                print(f"\n  Evaluating {method} (global consensus)...")
+                                
+                                # Method didn't contribute, use global pseudo GT
+                                enhanced_target = target.copy()
+                                enhanced_target['pseudo_ground_truth'] = pseudo_gt['consensus_data']
+                                enhanced_target['pseudo_confidence'] = pseudo_gt['overall_confidence']
+                                
+                                eval_res = self.evaluator.evaluate_single(enhanced_target, method, run_res)
+                                eval_res['pseudo_ground_truth_used'] = True
+                                eval_res['evaluation_type'] = 'global-consensus'
+                                eval_res['pseudo_confidence'] = pseudo_gt['overall_confidence']
+                                eval_res['consensus_metadata'] = {
+                                    'scrapers_used': pseudo_gt.get('scrapers_used', []),
+                                    'coverage': pseudo_gt.get('stats', {}).get('coverage')
+                                }
+                            
                             results.append(eval_res)
                 else:
-                    # Fallback to regular evaluation
+                    print(f"✗ Could not build reliable pseudo ground truth")
+                    
+                    # No reliable pseudo GT, use standard evaluation
                     for method in methods:
                         if method in target_results:
                             for run_res in target_results[method]:
                                 eval_res = self.evaluator.evaluate_single(target, method, run_res)
                                 eval_res['pseudo_ground_truth_used'] = False
+                                eval_res['evaluation_type'] = 'no-consensus'
                                 results.append(eval_res)
             else:
-                # Original behavior
+                # Original behavior without pseudo ground truth
                 for method in methods:
                     timeout = self.config.get("time_budget", {}).get(method, {}).get("timeout_seconds", 15)
                     for r in range(repeats):
                         run_res = self.run_target_with_method(target, method, timeout)
                         eval_res = self.evaluator.evaluate_single(target, method, run_res)
+                        eval_res['pseudo_ground_truth_used'] = False
                         results.append(eval_res)
         
         return results
@@ -206,20 +205,91 @@ class Runner:
         return target_results
     
     def _build_pseudo_ground_truth_for_target(self, target: dict, target_results: dict):
-        """Build pseudo ground truth for a specific target."""
-        url = target.get('url')
-        # Take the first run of each method for consensus building
+        """Build pseudo ground truth for a specific target from all successful runs."""
+        # Use first successful run of each method
         results_by_method = {}
         for method, runs in target_results.items():
-            if runs and runs[0].get('ok'):  # Use first successful run
+            if runs and runs[0].get('ok'):
                 results_by_method[method] = runs[0]
         
-        if len(results_by_method) < 2:
+        if len(results_by_method) < self.pseudo_gt_builder.min_consensus:
             return None
         
-        # Build consensus
-        pseudo_gt = self.pseudo_gt_builder.build_consensus(results_by_method)
-        return pseudo_gt
+        return self.pseudo_gt_builder.build_consensus(results_by_method)
+    
+    def _build_leave_one_out_evaluation(self, target: dict, excluded_method: str, 
+                                       target_results: dict) -> dict:
+        """
+        Build evaluation target with leave-one-out pseudo GT and comparison results.
+        
+        CRITICAL: Must extract fields from EACH scraper's data for comparison
+        """
+        print(f"    [LOO] Building leave-one-out for {excluded_method}...")
+        
+        # Build consensus excluding this method
+        results_by_method = {}
+        for method, runs in target_results.items():
+            if method == excluded_method:
+                continue
+            if runs and runs[0].get('ok'):
+                results_by_method[method] = runs[0]
+        
+        print(f"    [LOO] Other successful scrapers: {list(results_by_method.keys())}")
+        
+        if len(results_by_method) < self.pseudo_gt_builder.min_consensus:
+            print(f"    [LOO] Insufficient scrapers: {len(results_by_method)} < {self.pseudo_gt_builder.min_consensus}")
+            return None
+        
+        # Build leave-one-out pseudo GT
+        loo_pseudo_gt = self.pseudo_gt_builder.build_consensus(results_by_method)
+        
+        if not loo_pseudo_gt or loo_pseudo_gt.get('overall_confidence', 0) < 0.6:
+            print(f"    [LOO] Low confidence: {loo_pseudo_gt.get('overall_confidence', 0) if loo_pseudo_gt else 0:.2f}")
+            return None
+        
+         # CRITICAL FIX: Extract fields from HTML for each scraper
+        comparison_results = {}
+        selectors = target.get('selectors', {})
+
+        for method, result in results_by_method.items():
+            html = result.get('data', {}).get('html')
+            if not html:
+                print(f" [LOO] {method}: No HTML found")
+                continue
+
+            # Extract fields using auto-extraction or manual selectors
+            if selectors:
+                extracted = self.evaluator._extract_with_selectors(html, selectors)
+            else:
+                # AUTO MODE
+                extracted = self.evaluator._extract_all_content(html)
+
+            if extracted and any(v for v in extracted.values() if v):
+                comparison_results[method] = extracted
+                print(f" [LOO] {method}: Extracted {len(extracted)} fields")
+                # Debug: show field names
+                print(f"       Fields: {list(extracted.keys())[:5]}...")
+            else:
+                print(f" [LOO] {method}: No fields extracted")
+
+            if not comparison_results:
+                print(f"    [LOO] ERROR: No comparison data extracted from other scrapers!")
+                return None
+
+            print(f"    [LOO] Total comparison scrapers: {len(comparison_results)}")
+        
+        # Build evaluation target
+        eval_target = target.copy()
+        eval_target['pseudo_ground_truth'] = loo_pseudo_gt['consensus_data']
+        eval_target['pseudo_confidence'] = loo_pseudo_gt['overall_confidence']
+        eval_target['comparison_results'] = comparison_results  # THIS IS THE KEY!
+        eval_target['leave_one_out_metadata'] = {
+            'excluded_method': excluded_method,
+            'scrapers_used': loo_pseudo_gt.get('scrapers_used', []),
+            'coverage': loo_pseudo_gt.get('stats', {}).get('coverage')
+        }
+        
+        return eval_target
     
     def _save_raw_result(self, target: dict, method: str, result: dict):
         """Save individual raw scraper result."""
@@ -243,17 +313,14 @@ class Runner:
         if not self.raw_results:
             return None
         
-        # Generate run ID if not provided
         if run_id is None:
             run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        # Save to timestamped file
         raw_file = RAW_RESULTS_DIR / f"raw_results_{run_id}.json"
         
         with open(raw_file, 'w', encoding='utf-8') as f:
             json.dump(self.raw_results, f, ensure_ascii=False, indent=2)
         
-        # Also save to latest
         latest_file = RAW_RESULTS_DIR / "raw_results_latest.json"
         with open(latest_file, 'w', encoding='utf-8') as f:
             json.dump(self.raw_results, f, ensure_ascii=False, indent=2)
@@ -312,8 +379,10 @@ def main():
         run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         raw_file = runner.save_all_raw_results(run_id)
         if raw_file:
+            print(f"\n{'='*70}")
             print(f"Saved: {out_json}, {out_csv}, and {raw_file}")
             print(f"Raw results also saved to: {RAW_RESULTS_DIR / 'raw_results_latest.json'}")
+            print(f"{'='*70}")
         else:
             print(f"Saved: {out_json} and {out_csv}")
     else:
