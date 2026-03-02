@@ -183,6 +183,55 @@ class Evaluator:
             extracted['word_count'] = len(words)
             extracted['char_count'] = len(extracted['body_text'])
 
+        # --- NEW: Extracting counts for Redundancy ---
+        total_items_count = 0
+        unique_items_set = set()
+
+        # Count list items
+        for ul in soup.find_all(['ul', 'ol']):
+            for li in ul.find_all('li'):
+                text = li.get_text(strip=True)
+                if text:
+                    total_items_count += 1
+                    unique_items_set.add(self._normalize_text(text))
+        
+        # Count links
+        for a in soup.find_all('a', href=True):
+            text = a.get_text(strip=True)
+            if text:
+                total_items_count += 1
+                unique_items_set.add(self._normalize_text(text))
+                
+        extracted['total_items'] = total_items_count
+        extracted['unique_items'] = len(unique_items_set)
+        
+        # --- NEW: Extracting Published Date for Freshness ---
+        pub_date = None
+        # Try meta tags
+        meta_pub = soup.find('meta', attrs={'property': 'article:published_time'}) or \
+                   soup.find('meta', attrs={'name': 'date'}) or \
+                   soup.find('meta', attrs={'name': 'pubdate'})
+        if meta_pub and meta_pub.get('content'):
+            pub_date = meta_pub['content']
+            
+        # Try JSON-LD if not found in meta
+        if not pub_date and json_ld_scripts:
+            try:
+                for script in json_ld_scripts:
+                    data = json.loads(script.string)
+                    if isinstance(data, dict):
+                        if 'datePublished' in data:
+                            pub_date = data['datePublished']
+                            break
+                        elif 'dateModified' in data:
+                            pub_date = data['dateModified']
+                            break
+            except:
+                pass
+                
+        if pub_date:
+            extracted['dynamic_published_date'] = pub_date
+
         return extracted
 
     def evaluate_single(self, target: Dict[str, Any], method: str, run_res: Dict[str, Any]) -> Dict[str, Any]:
@@ -251,12 +300,17 @@ class Evaluator:
             else:
                 print(f"[EVALUATOR] {method}: No evaluation data available")
 
-        # Freshness
-        fresh = Metrics.freshness(source_updated_at, observed_at)
+        # Freshness: try target config first, then dynamic extraction
+        dyn_pub_date = extracted_fields.get("dynamic_published_date") if isinstance(extracted_fields, dict) else None
+        final_source_updated = source_updated_at or dyn_pub_date
+        fresh = Metrics.freshness(final_source_updated, observed_at)
 
-        # Redundancy
-        total_items = data.get("total_items") or 0
-        unique_items = data.get("unique_items") or total_items
+        # Redundancy: use extracted items if available, else fallback to raw data
+        ext_total = extracted_fields.get("total_items") if isinstance(extracted_fields, dict) else None
+        ext_unique = extracted_fields.get("unique_items") if isinstance(extracted_fields, dict) else None
+        
+        total_items = ext_total if ext_total is not None else (data.get("total_items") or 0)
+        unique_items = ext_unique if ext_unique is not None else (data.get("unique_items") or total_items)
         red = Metrics.redundancy(total_items, unique_items)
 
         # Throughput
