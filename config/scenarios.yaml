@@ -27,6 +27,10 @@ targets:
     url: https://kubernetes.io/
     complexity: high
 
+  - name: 30yearwar
+    url: https://en.wikipedia.org/wiki/Thirty_Years'_War
+    complexity: high
+    
 
 
 sampling:
